@@ -1,0 +1,188 @@
+/*
+ * Copyright 2025 Wizdas P&A labo
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+#include <apr.h>
+#include <httpd.h>
+#include <http_config.h>
+#include <http_core.h>
+#include <http_log.h>
+#include <http_protocol.h>
+
+APLOG_USE_MODULE(blocklistd);
+
+#include <apr_cstr.h>
+#include <apr_strings.h>
+#include <apr_tables.h>
+
+#include <@BLOCKLIST_IMPL@.h>
+
+#ifndef BLOCKLIST_API_ENUM
+enum {
+    BLOCKLIST_AUTH_OK = 0,
+    BLOCKLIST_AUTH_FAIL = 1,
+    BLOCKLIST_ABUSIVE_BEHAVIOR = 2,
+    BLOCKLIST_BAD_USER = 3
+};
+#endif
+
+static const char* action_label[] = {
+    "Auth ok",
+    "Auth fail",
+    "Abusive behavior",
+    "Bad user"
+};
+
+typedef struct {
+    char *context;
+    apr_array_header_t *ignore_uri_patterns;
+    char abusive_response_codes[1000];
+} blocklist_config;
+
+static void blocklist_notify(request_rec *rec, int action)
+ {
+    apr_os_sock_t fd;
+    apr_socket_t* apr_sock;
+    apr_sockaddr_t* useragent_addr;
+
+    if (apr_sock = ap_get_conn_socket(rec->connection) )
+    {
+        apr_os_sock_get(&fd, apr_sock);
+        if (useragent_addr = rec->useragent_addr) {
+            @BLOCKLIST_IMPL@_sa(action,
+                         fd,
+                         (struct sockaddr*)&useragent_addr->sa,
+                         useragent_addr->salen,
+                         "httpd");
+        }
+        ap_log_error(APLOG_MARK,
+                     APLOG_NOTICE,
+                     0,
+                     rec->server,
+                     "mod_blocklistd: %s from %s to %s: \"%s %s\" %d",
+                     action_label[action],
+                     rec->useragent_ip,
+                     rec->hostname,
+                     rec->method,
+                     rec->uri,
+                     rec->status);
+    }
+}
+
+static int blocklistd_auth_handler(request_rec *rec, const char *auth_type)
+{
+    blocklist_notify(rec, BLOCKLIST_AUTH_FAIL);
+    return DECLINED;
+}
+
+static int blocklistd_log_handler(request_rec *rec)
+{
+    int action = -1;
+    blocklist_config *config = (blocklist_config*) ap_get_module_config(rec->per_dir_config, &blocklistd_module);
+
+    if (0 < rec->status && rec->status < 1000 &&
+        config->abusive_response_codes[rec->status]) {
+        if (rec->uri == NULL || 
+            !apr_cstr_match_glob_list(rec->uri, config->ignore_uri_patterns))
+            action = BLOCKLIST_ABUSIVE_BEHAVIOR;
+    }
+    if (action != -1) {
+        blocklist_notify(rec, action);
+    }
+
+    return DECLINED;
+}
+
+static void register_hooks(apr_pool_t *pool)
+{
+    ap_hook_note_auth_failure(blocklistd_auth_handler, NULL, NULL, APR_HOOK_FIRST);
+    ap_hook_log_transaction(blocklistd_log_handler, NULL, NULL, APR_HOOK_FIRST);
+}
+
+static void *create_dir_conf(apr_pool_t *pool, char *context)
+{
+    apr_array_header_t *patterns;
+    blocklist_config *cfg = apr_pcalloc(pool, sizeof(blocklist_config));
+    
+    if(cfg) {
+        context = context ? context : "(undefined context)";
+        /* Set some default values */
+        cfg->context = apr_pstrdup(pool, context);
+        patterns = apr_array_make(pool, 3, sizeof(char*));
+        APR_ARRAY_PUSH(patterns,char *) = "/favicon.ico";
+        APR_ARRAY_PUSH(patterns,char *) = "/robots.txt";
+        APR_ARRAY_PUSH(patterns,char *) = "/.well-known/*";
+        cfg->ignore_uri_patterns = patterns;
+        cfg->abusive_response_codes[400]= 1;
+        cfg->abusive_response_codes[403]= 1;
+        cfg->abusive_response_codes[404]= 1;
+        cfg->abusive_response_codes[404]= 1;
+        cfg->abusive_response_codes[410]= 1;
+        cfg->abusive_response_codes[421]= 1;
+    }
+    return cfg;
+}
+
+static const char* blocklist_set_ignore_uri_patterns(cmd_parms *cmd, void *CFG, int argc, char *const argv[])
+{
+    blocklist_config *cfg = (blocklist_config*)CFG;
+
+    for(int i=0;i<argc;i++){
+        APR_ARRAY_PUSH(cfg->ignore_uri_patterns,char *) = apr_pstrdup(cmd->pool, argv[i]);
+    }
+    return NULL;
+}
+
+static const char* blocklist_set_abusive_response_codes(cmd_parms *cmd, void *CFG, int argc, char *const argv[])
+{
+    int code;
+    blocklist_config *cfg = (blocklist_config*)CFG;
+
+    for(int i=0;i<argc;i++){
+        if (apr_cstr_atoi(&code, argv[i]) && 0 < code && code < 1000) {
+            cfg->abusive_response_codes[code] = 1;
+        }
+    }
+    return NULL;
+}
+
+static void *merge_dir_conf(apr_pool_t *pool, void *BASE, void *ADD) {
+    blocklist_config *base = (blocklist_config *) BASE ; /* This is what was set in the parent context */
+    blocklist_config *add = (blocklist_config *) ADD ;   /* This is what is set in the new context */
+    blocklist_config *conf = (blocklist_config *) create_dir_conf(pool, "Merged configuration"); /* This will be the merged configuration */
+    
+    /* Merge configurations */
+    for(int i=0;i<1000;i++){
+        conf->abusive_response_codes[i] = base->abusive_response_codes[i] | add->abusive_response_codes[i];
+    }
+    conf->ignore_uri_patterns = apr_array_append(pool, base->ignore_uri_patterns, add->ignore_uri_patterns);
+    return conf ;
+}
+static const command_rec blocklist_directives[] = {
+    AP_INIT_TAKE_ARGV("BlocklistIgnoreUriPatterns", blocklist_set_ignore_uri_patterns, NULL, RSRC_CONF, "Glob patterns ignored as abusive behavior"),
+    AP_INIT_TAKE_ARGV("BlocklistAbusiveResponseCodes", blocklist_set_abusive_response_codes, NULL, RSRC_CONF, "Set response codes as blocklistd abusive behavior"),
+    { NULL }
+};
+
+module AP_MODULE_DECLARE_DATA blocklistd_module =
+{
+    STANDARD20_MODULE_STUFF,
+    create_dir_conf,
+    merge_dir_conf,
+    NULL,
+    NULL,
+    blocklist_directives,
+    register_hooks
+};
