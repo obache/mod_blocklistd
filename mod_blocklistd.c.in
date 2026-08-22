@@ -122,6 +122,7 @@ static void *create_dir_conf(apr_pool_t *pool, char *context)
         cfg->context = apr_pstrdup(pool, context);
         patterns = apr_array_make(pool, 3, sizeof(char*));
         APR_ARRAY_PUSH(patterns,char *) = "/favicon.ico";
+        APR_ARRAY_PUSH(patterns,char *) = "/apple-touch-icon*.png";
         APR_ARRAY_PUSH(patterns,char *) = "/robots.txt";
         APR_ARRAY_PUSH(patterns,char *) = "/.well-known/*";
         cfg->ignore_uri_patterns = patterns;
