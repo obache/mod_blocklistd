@@ -129,7 +129,7 @@ static void *create_dir_conf(apr_pool_t *pool, char *context)
         cfg->abusive_response_codes[400]= 1;
         cfg->abusive_response_codes[403]= 1;
         cfg->abusive_response_codes[404]= 1;
-        cfg->abusive_response_codes[404]= 1;
+        cfg->abusive_response_codes[405]= 1;
         cfg->abusive_response_codes[410]= 1;
         cfg->abusive_response_codes[421]= 1;
     }
