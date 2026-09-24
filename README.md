@@ -52,7 +52,7 @@ HTTP authenticatin failures are handled as "Auth fail".
 
 - Default:
 
-  BlocklistIgnoreUriPatterns 400 403 404 405 410 421
+  BlocklistAbusiveResponseCodes 400 403 404 405 410 421
 
 - Context:
 
